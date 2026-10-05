@@ -6,12 +6,15 @@ High-performance SQLite FTS5 store with WAL mode, automated triggers, and sub-5m
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Optional
-from omnivault.config import DATABASE_PATH
+from typing import Any
+
+from omnivault.config import DATABASE_PATH, ensure_dirs
 
 
 def get_connection(db_path: Path = DATABASE_PATH) -> sqlite3.Connection:
     """Returns a configured SQLite connection with WAL mode and row factory."""
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
@@ -22,6 +25,8 @@ def get_connection(db_path: Path = DATABASE_PATH) -> sqlite3.Connection:
 
 def init_db(db_path: Path = DATABASE_PATH) -> None:
     """Initializes the database schema and full-text search index."""
+    if db_path == DATABASE_PATH:
+        ensure_dirs()
     with get_connection(db_path) as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS volumes (
@@ -91,7 +96,7 @@ def get_or_create_volume(
     mount_point: str,
     label: str,
     role: str = "VAULT",
-    disk_name: Optional[str] = None,
+    disk_name: str | None = None,
     db_path: Path = DATABASE_PATH,
 ) -> int:
     """Retrieves an existing volume ID or registers a new one."""
@@ -113,7 +118,14 @@ def get_or_create_volume(
             INSERT INTO volumes (uuid, label, mount_point, role, disk_name, is_online, last_scanned)
             VALUES (?, ?, ?, ?, ?, 1, ?)
             """,
-            (f"{label.lower()}-{int(time.time())}", label, clean_mount, role, disk_name, time.time()),
+            (
+                f"{label.lower()}-{int(time.time())}",
+                label,
+                clean_mount,
+                role,
+                disk_name,
+                time.time(),
+            ),
         )
         return cursor.lastrowid
 
@@ -131,23 +143,31 @@ def check_all_volumes_online_status(db_path: Path = DATABASE_PATH) -> list[dict[
     """Checks the physical existence of mount points and updates online status."""
     results = []
     with get_connection(db_path) as conn:
-        volumes = conn.execute("SELECT id, label, mount_point, role, is_online FROM volumes").fetchall()
+        volumes = conn.execute(
+            "SELECT id, label, mount_point, role, is_online FROM volumes"
+        ).fetchall()
         for v in volumes:
             mount = Path(v["mount_point"])
             online = mount.exists()
             if (1 if online else 0) != v["is_online"]:
-                conn.execute("UPDATE volumes SET is_online = ? WHERE id = ?", (1 if online else 0, v["id"]))
-            results.append({
-                "id": v["id"],
-                "label": v["label"],
-                "mount_point": v["mount_point"],
-                "role": v["role"],
-                "is_online": online,
-            })
+                conn.execute(
+                    "UPDATE volumes SET is_online = ? WHERE id = ?", (1 if online else 0, v["id"])
+                )
+            results.append(
+                {
+                    "id": v["id"],
+                    "label": v["label"],
+                    "mount_point": v["mount_point"],
+                    "role": v["role"],
+                    "is_online": online,
+                }
+            )
     return results
 
 
-def upsert_files_batch(volume_id: int, records: list[dict[str, Any]], db_path: Path = DATABASE_PATH) -> int:
+def upsert_files_batch(
+    volume_id: int, records: list[dict[str, Any]], db_path: Path = DATABASE_PATH
+) -> int:
     """
     Inserts or updates a batch of file records in a single high-speed transaction.
     """
@@ -204,9 +224,9 @@ def format_bytes(size: int) -> str:
 
 def search(
     query: str,
-    category: Optional[str] = None,
-    volume_label: Optional[str] = None,
-    extension: Optional[str] = None,
+    category: str | None = None,
+    volume_label: str | None = None,
+    extension: str | None = None,
     limit: int = 50,
     offset: int = 0,
     db_path: Path = DATABASE_PATH,
@@ -258,7 +278,7 @@ def search(
         total = conn.execute(count_sql, params).fetchone()["total"]
 
         sql = f"""
-        SELECT 
+        SELECT
             files.id,
             files.filename,
             files.rel_path,
@@ -288,23 +308,25 @@ def search(
         vol_online = bool(r["is_online"])
         # If the volume is offline, status is COLD_OFFLINE
         status = "COLD_ONLINE" if vol_online else "COLD_OFFLINE"
-        items.append({
-            "id": r["id"],
-            "filename": r["filename"],
-            "rel_path": r["rel_path"],
-            "abs_path": r["abs_path"],
-            "extension": r["extension"],
-            "category": r["category"],
-            "size_bytes": r["size_bytes"],
-            "size_formatted": format_bytes(r["size_bytes"] or 0),
-            "mtime": r["mtime"],
-            "blake3_hash": r["blake3_hash"],
-            "has_thumbnail": bool(r["has_thumbnail"]),
-            "volume_label": r["volume_label"],
-            "mount_point": r["mount_point"],
-            "is_online": vol_online,
-            "status": status,
-        })
+        items.append(
+            {
+                "id": r["id"],
+                "filename": r["filename"],
+                "rel_path": r["rel_path"],
+                "abs_path": r["abs_path"],
+                "extension": r["extension"],
+                "category": r["category"],
+                "size_bytes": r["size_bytes"],
+                "size_formatted": format_bytes(r["size_bytes"] or 0),
+                "mtime": r["mtime"],
+                "blake3_hash": r["blake3_hash"],
+                "has_thumbnail": bool(r["has_thumbnail"]),
+                "volume_label": r["volume_label"],
+                "mount_point": r["mount_point"],
+                "is_online": vol_online,
+                "status": status,
+            }
+        )
 
     return {
         "query": query,

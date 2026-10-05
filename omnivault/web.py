@@ -4,43 +4,71 @@ Provides lightning-fast search-as-you-type, offline thumbnail previews,
 drive health monitoring, cache cleaning, and large file analysis.
 """
 
-import os
-import subprocess
-from pathlib import Path
-from typing import Optional
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+from __future__ import annotations
 
-from omnivault.config import THUMBNAILS_DIR
+import secrets
+import subprocess
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import uvicorn
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+
+from omnivault.config import SETTINGS, THUMBNAILS_DIR
 from omnivault.db import (
+    check_all_volumes_online_status,
+    format_bytes,
+    get_stats,
     init_db,
     search,
-    get_stats,
-    check_all_volumes_online_status,
 )
 from omnivault.storage import (
+    clean_cache_dir,
     generate_full_report,
     scan_cache_bloat,
-    clean_cache_dir,
-    get_drive_reports,
 )
 
-app = FastAPI(title="OmniVault Web Gateway", version="0.2.0")
+# Cryptographic token generated per server process to protect sensitive local actions
+ACTION_TOKEN = secrets.token_urlsafe(32)
+
+
+def verify_action_token(x_omnivault_token: str | None = Header(None)) -> str:
+    """Validates that destructive localhost requests include the active process token."""
+    if not x_omnivault_token or not secrets.compare_digest(x_omnivault_token, ACTION_TOKEN):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Invalid or missing X-OmniVault-Token authentication header.",
+        )
+    return x_omnivault_token
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="OmniVault Web Gateway", version="0.2.0", lifespan=lifespan)
+
+# Restrict CORS strictly to loopback interfaces
+allowed_origins = [
+    "http://127.0.0.1",
+    "http://localhost",
+    f"http://127.0.0.1:{SETTINGS.web_port}",
+    f"http://localhost:{SETTINGS.web_port}",
+    "http://127.0.0.1:7890",
+    "http://localhost:7890",
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
 
 
 @app.get("/api/stats")
@@ -52,9 +80,9 @@ def api_stats():
 @app.get("/api/search")
 def api_search(
     q: str = Query("", description="Search query"),
-    category: Optional[str] = Query(None, description="Category filter"),
-    volume: Optional[str] = Query(None, description="Volume label filter"),
-    ext: Optional[str] = Query(None, description="Extension filter"),
+    category: str | None = Query(None, description="Category filter"),
+    volume: str | None = Query(None, description="Volume label filter"),
+    ext: str | None = Query(None, description="Extension filter"),
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -79,11 +107,13 @@ def api_thumbnail(file_hash: str):
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 
-@app.post("/api/open")
+@app.post("/api/open", dependencies=[Depends(verify_action_token)])
 def api_open_file(path: str = Query(..., description="Absolute path to open or reveal")):
     target = Path(path)
     if not target.exists():
-        raise HTTPException(status_code=404, detail="File is currently offline or volume is disconnected.")
+        raise HTTPException(
+            status_code=404, detail="File is currently offline or volume is disconnected."
+        )
 
     # Reveal in Windows Explorer
     subprocess.Popen(["explorer.exe", f"/select,{str(target)}"])
@@ -96,7 +126,7 @@ def api_storage_report():
     return generate_full_report()
 
 
-@app.post("/api/storage/clean-cache")
+@app.post("/api/storage/clean-cache", dependencies=[Depends(verify_action_token)])
 def api_clean_cache(execute: bool = Query(False, description="Whether to actually delete files")):
     """Scans and optionally cleans safe system and dev caches."""
     caches = scan_cache_bloat()
@@ -108,7 +138,7 @@ def api_clean_cache(execute: bool = Query(False, description="Whether to actuall
             res["label"] = c.label
             total_freed += res["freed_bytes"]
             results.append(res)
-    from omnivault.db import format_bytes
+
     return {
         "executed": execute,
         "total_freed_bytes": total_freed,
@@ -119,7 +149,7 @@ def api_clean_cache(execute: bool = Query(False, description="Whether to actuall
 
 @app.get("/", response_class=HTMLResponse)
 def index_page():
-    return HTML_CONTENT
+    return HTML_CONTENT.replace("{{OMNIVAULT_TOKEN}}", ACTION_TOKEN)
 
 
 HTML_CONTENT = """<!DOCTYPE html>
@@ -179,10 +209,10 @@ HTML_CONTENT = """<!DOCTYPE html>
     <div class="flex flex-col gap-3">
       <div class="relative">
         <i class="fa-solid fa-magnifying-glass absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-lg"></i>
-        <input 
-          id="search-input" 
-          type="text" 
-          placeholder="Search by filename, extension, tag, or topic across all drives..." 
+        <input
+          id="search-input"
+          type="text"
+          placeholder="Search by filename, extension, tag, or topic across all drives..."
           class="w-full pl-14 pr-12 py-4 rounded-2xl glass text-white placeholder-slate-500 text-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-all shadow-xl"
           autofocus
         />
@@ -323,6 +353,18 @@ HTML_CONTENT = """<!DOCTYPE html>
   </main>
 
   <script>
+    const OMNIVAULT_TOKEN = "{{OMNIVAULT_TOKEN}}";
+
+    function esc(str) {
+      if (str === null || str === undefined) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
     let currentCategory = "";
     let debounceTimer = null;
 
@@ -381,7 +423,7 @@ HTML_CONTENT = """<!DOCTYPE html>
           badge.className = `px-2.5 py-1 rounded-md text-xs font-mono flex items-center gap-1.5 ${
             v.is_online ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800' : 'bg-rose-950/60 text-rose-400 border border-rose-900/60 opacity-60'
           }`;
-          badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full ${v.is_online ? 'bg-emerald-400' : 'bg-rose-400'}"></span> ${v.label} (${v.mount_point}) [${v.is_online ? 'ONLINE' : 'UNPLUGGED'}]`;
+          badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full ${v.is_online ? 'bg-emerald-400' : 'bg-rose-400'}"></span> ${esc(v.label)} (${esc(v.mount_point)}) [${v.is_online ? 'ONLINE' : 'UNPLUGGED'}]`;
           volumesBar.appendChild(badge);
         });
       } catch (e) {
@@ -418,7 +460,7 @@ HTML_CONTENT = """<!DOCTYPE html>
           let mediaHtml = '';
           if (item.has_thumbnail && item.blake3_hash) {
             mediaHtml = `<div class="w-full h-32 rounded-lg bg-slate-900 overflow-hidden mb-3 flex items-center justify-center">
-              <img src="/api/thumb/${item.blake3_hash}" alt="${item.filename}" class="w-full h-full object-cover" loading="lazy" />
+              <img src="/api/thumb/${encodeURIComponent(item.blake3_hash)}" alt="${esc(item.filename)}" class="w-full h-full object-cover" loading="lazy" />
             </div>`;
           }
 
@@ -440,19 +482,19 @@ HTML_CONTENT = """<!DOCTYPE html>
               <div class="flex items-start justify-between gap-2 mb-1.5">
                 <div class="flex items-center gap-2 overflow-hidden">
                   <i class="fa-solid ${iconClass} text-sm"></i>
-                  <span class="font-semibold text-sm text-slate-100 truncate" title="${item.filename}">${item.filename}</span>
+                  <span class="font-semibold text-sm text-slate-100 truncate" title="${esc(item.filename)}">${esc(item.filename)}</span>
                 </div>
                 ${statusBadge}
               </div>
-              <p class="text-[11px] text-slate-400 font-mono truncate mb-2" title="${item.rel_path}">
-                <i class="fa-regular fa-folder text-slate-500 mr-1"></i>${item.rel_path}
+              <p class="text-[11px] text-slate-400 font-mono truncate mb-2" title="${esc(item.rel_path)}">
+                <i class="fa-regular fa-folder text-slate-500 mr-1"></i>${esc(item.rel_path)}
               </p>
             </div>
 
             <div class="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-              <span>${item.size_formatted}</span>
+              <span>${esc(item.size_formatted)}</span>
               <div class="flex items-center gap-2">
-                <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">${item.volume_label}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">${esc(item.volume_label)}</span>
                 ${item.is_online ? `
                   <button onclick="revealFile('${encodeURIComponent(item.abs_path)}')" class="hover:text-cyan-400 p-1" title="Reveal in Windows Explorer">
                     <i class="fa-solid fa-arrow-up-right-from-square"></i>
@@ -475,7 +517,15 @@ HTML_CONTENT = """<!DOCTYPE html>
     async function revealFile(encodedPath) {
       const path = decodeURIComponent(encodedPath);
       try {
-        await fetch(`/api/open?path=${encodeURIComponent(path)}`, { method: "POST" });
+        const res = await fetch(`/api/open?path=${encodeURIComponent(path)}`, {
+          method: "POST",
+          headers: { "X-OmniVault-Token": OMNIVAULT_TOKEN },
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert("Cannot reveal file: " + (err.detail || res.statusText));
+          return;
+        }
       } catch (e) {
         alert("Cannot open file: " + e.message);
       }
@@ -501,15 +551,15 @@ HTML_CONTENT = """<!DOCTYPE html>
 
           card.innerHTML = `
             <div class="flex items-center justify-between">
-              <span class="font-bold text-sm text-white">${d.letter}: ${d.label || 'Volume'}</span>
-              <span class="text-xs font-mono text-slate-400">${d.fs_type}</span>
+              <span class="font-bold text-sm text-white">${esc(d.letter)}: ${esc(d.label || 'Volume')}</span>
+              <span class="text-xs font-mono text-slate-400">${esc(d.fs_type)}</span>
             </div>
             <div class="w-full bg-slate-900 rounded-full h-2 overflow-hidden mt-1">
               <div class="${barColor} h-2 rounded-full" style="width: ${d.used_pct}%"></div>
             </div>
             <div class="flex items-center justify-between text-xs text-slate-400 mt-1 font-mono">
-              <span>Free: ${d.free_formatted}</span>
-              <span>${d.used_pct}% (${d.total_formatted})</span>
+              <span>Free: ${esc(d.free_formatted)}</span>
+              <span>${d.used_pct}% (${esc(d.total_formatted)})</span>
             </div>
           `;
           drivesGrid.appendChild(card);
@@ -523,11 +573,11 @@ HTML_CONTENT = """<!DOCTYPE html>
           item.className = "flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 text-xs";
           item.innerHTML = `
             <div class="flex flex-col overflow-hidden mr-2">
-              <span class="font-semibold text-slate-200">${c.label}</span>
-              <span class="text-[10px] text-slate-500 font-mono truncate" title="${c.path}">${c.path}</span>
+              <span class="font-semibold text-slate-200">${esc(c.label)}</span>
+              <span class="text-[10px] text-slate-500 font-mono truncate" title="${esc(c.path)}">${esc(c.path)}</span>
             </div>
             <div class="text-right whitespace-nowrap">
-              <span class="font-mono text-amber-400 font-bold">${c.size_formatted}</span>
+              <span class="font-mono text-amber-400 font-bold">${esc(c.size_formatted)}</span>
               <div class="text-[10px] text-slate-500">${c.files} files</div>
             </div>
           `;
@@ -542,10 +592,10 @@ HTML_CONTENT = """<!DOCTYPE html>
           item.className = "flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 text-xs";
           item.innerHTML = `
             <div class="flex flex-col overflow-hidden mr-2">
-              <span class="font-semibold text-slate-200">[${d.name}]</span>
-              <span class="text-[10px] text-slate-500 font-mono truncate" title="${d.path}">${d.project}</span>
+              <span class="font-semibold text-slate-200">[${esc(d.name)}]</span>
+              <span class="text-[10px] text-slate-500 font-mono truncate" title="${esc(d.path)}">${esc(d.project)}</span>
             </div>
-            <span class="font-mono text-emerald-400 font-bold whitespace-nowrap">${d.size_formatted}</span>
+            <span class="font-mono text-emerald-400 font-bold whitespace-nowrap">${esc(d.size_formatted)}</span>
           `;
           devBloatList.appendChild(item);
         });
@@ -557,14 +607,14 @@ HTML_CONTENT = """<!DOCTYPE html>
           row.className = "flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 text-xs hover:border-slate-700";
           row.innerHTML = `
             <div class="flex items-center gap-2 overflow-hidden mr-3">
-              <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-mono bg-slate-800 text-slate-300">${f.category}</span>
+              <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-mono bg-slate-800 text-slate-300">${esc(f.category)}</span>
               <div class="flex flex-col overflow-hidden">
-                <span class="font-semibold text-slate-200 truncate" title="${f.filename}">${f.filename}</span>
-                <span class="text-[10px] text-slate-500 font-mono truncate" title="${f.path}">${f.path}</span>
+                <span class="font-semibold text-slate-200 truncate" title="${esc(f.filename)}">${esc(f.filename)}</span>
+                <span class="text-[10px] text-slate-500 font-mono truncate" title="${esc(f.path)}">${esc(f.path)}</span>
               </div>
             </div>
             <div class="flex items-center gap-3 whitespace-nowrap">
-              <span class="font-mono font-bold text-rose-400">${f.size_formatted}</span>
+              <span class="font-mono font-bold text-rose-400">${esc(f.size_formatted)}</span>
               <button onclick="revealFile('${encodeURIComponent(f.path)}')" class="hover:text-cyan-400 p-1" title="Reveal in Windows Explorer">
                 <i class="fa-solid fa-arrow-up-right-from-square"></i>
               </button>
@@ -588,7 +638,15 @@ HTML_CONTENT = """<!DOCTYPE html>
       btnCleanCache.disabled = true;
       btnCleanCache.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Purging Caches...';
       try {
-        const res = await fetch("/api/storage/clean-cache?execute=true", { method: "POST" });
+        const res = await fetch("/api/storage/clean-cache?execute=true", {
+          method: "POST",
+          headers: { "X-OmniVault-Token": OMNIVAULT_TOKEN },
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert("Cleanup rejected: " + (err.detail || res.statusText));
+          return;
+        }
         const data = await res.json();
         alert(`Successfully cleaned caches and reclaimed ${data.total_freed_formatted}!`);
         loadStorageReport();
@@ -634,8 +692,10 @@ HTML_CONTENT = """<!DOCTYPE html>
 """
 
 
-def run_server(host: str = "127.0.0.1", port: int = 7890):
-    uvicorn.run(app, host=host, port=port, log_level="info")
+def run_server(host: str | None = None, port: int | None = None):
+    h = host or SETTINGS.web_host
+    p = port or SETTINGS.web_port
+    uvicorn.run(app, host=h, port=p, log_level="info")
 
 
 if __name__ == "__main__":

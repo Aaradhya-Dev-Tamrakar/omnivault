@@ -57,6 +57,21 @@ function Write-Fail {
 $repoRoot = $PSScriptRoot
 Set-Location $repoRoot
 
+function Push-Branch {
+    Write-Status "Pushing commits to origin/$branch..."
+    git push -u origin $branch
+    if ($LASTEXITCODE -ne 0) {
+        Write-Status "Push rejected, attempting pull --rebase and retry..."
+        git pull origin $branch --rebase --autostash
+        git push -u origin $branch
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Git push failed after rebase."
+            exit 1
+        }
+    }
+    Write-Success "Pushed to origin/$branch successfully."
+}
+
 if (-not (Test-Path "$repoRoot\.git")) {
     Write-Fail "Not a Git repository: $repoRoot"
     exit 1
@@ -65,15 +80,23 @@ if (-not (Test-Path "$repoRoot\.git")) {
 $branch = (git branch --show-current).Trim()
 Write-Status "Active branch: [$branch]"
 
-# 1. Pull with rebase if origin is configured
+# 1. Pull with rebase if origin is configured and the branch already exists remotely
 $hasOrigin = (git remote) -contains "origin"
+$hasRemoteBranch = $false
 if ($hasOrigin) {
+    git ls-remote --exit-code --heads origin $branch *> $null
+    $hasRemoteBranch = ($LASTEXITCODE -eq 0)
+}
+if ($hasRemoteBranch) {
     Write-Status "Pulling latest changes from origin/$branch with rebase & autostash..."
     git pull origin $branch --rebase --autostash
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "Git pull failed. Resolve rebase conflicts and try again."
         exit 1
     }
+}
+elseif ($hasOrigin) {
+    Write-Status "Branch [$branch] not on origin yet; skipping pull (first push will set upstream)."
 }
 
 if ($PullOnly) {
@@ -84,6 +107,18 @@ if ($PullOnly) {
 # 2. Check for working tree changes
 $status = git status --porcelain
 if (-not $status) {
+    $unpushed = 0
+    if ($hasRemoteBranch) {
+        $unpushed = [int](git rev-list --count "origin/$branch..HEAD")
+    }
+    elseif ($hasOrigin) {
+        $unpushed = 1
+    }
+    if ($hasOrigin -and -not $NoPush -and -not $WhatIf -and $unpushed -gt 0) {
+        Write-Status "Working tree is clean; pushing $unpushed unpushed commit(s)."
+        Push-Branch
+        exit 0
+    }
     Write-Success "Working tree is clean. Nothing to commit."
     exit 0
 }
@@ -119,6 +154,15 @@ if (-not $commitMsg) {
     elseif ($stagedFiles -match "test_") {
         $commitMsg = "test(omnivault): add or update test suites"
     }
+    elseif ($stagedFiles -match "^\.github/|pyproject\.toml|\.pre-commit") {
+        $commitMsg = "ci(omnivault): update build, lint, and CI configuration"
+    }
+    elseif ($stagedFiles -match "config\.py") {
+        $commitMsg = "feat(config): update user configuration layer"
+    }
+    elseif ($stagedFiles -match "staging\.py|watcher\.py|verify\.py") {
+        $commitMsg = "feat(vault): update ingestion, offload, and integrity engine"
+    }
     elseif ($stagedFiles -match "storage\.py") {
         $commitMsg = "feat(storage): enhance system storage optimization engine"
     }
@@ -147,18 +191,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # 7. Push to origin
 if ($hasOrigin -and -not $NoPush) {
-    Write-Status "Pushing commits to origin/$branch..."
-    git push origin $branch
-    if ($LASTEXITCODE -ne 0) {
-        Write-Status "Push rejected, attempting pull --rebase and retry..."
-        git pull origin $branch --rebase --autostash
-        git push origin $branch
-        if ($LASTEXITCODE -ne 0) {
-            Write-Fail "Git push failed after rebase."
-            exit 1
-        }
-    }
-    Write-Success "Pushed to origin/$branch successfully."
+    Push-Branch
 }
 
 Write-Success "OmniVault synchronization complete."

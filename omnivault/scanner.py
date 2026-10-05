@@ -4,8 +4,9 @@ Traverses drives using os.scandir, filters system noise, and generates metadata 
 """
 
 import os
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Callable, Generator, Optional
+
 from omnivault.config import IGNORED_DIRS, get_category
 from omnivault.hasher import compute_blake3
 from omnivault.thumbnail import generate_thumbnail
@@ -16,11 +17,11 @@ def scan_directory(
     compute_hash: bool = True,
     make_thumbnails: bool = True,
     batch_size: int = 500,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> Generator[list[dict], None, None]:
     """
     Crawls a root directory and yields batches of file metadata records.
-    
+
     Args:
         root_path: Starting folder or drive root (e.g. 'I:/')
         compute_hash: Whether to calculate cryptographic BLAKE3 hashes
