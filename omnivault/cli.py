@@ -17,6 +17,7 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
+from omnivault.config import SETTINGS
 from omnivault.db import (
     check_all_volumes_online_status,
     get_stats,
@@ -59,13 +60,33 @@ def build_parser() -> argparse.ArgumentParser:
     # status command
     subparsers.add_parser("status", help="Display overview of indexed volumes and categories")
 
+    # verify-vault command
+    verify_parser = subparsers.add_parser(
+        "verify-vault",
+        help="Cryptographically audit vault files against catalog hashes for corruption or loss",
+    )
+    verify_parser.add_argument(
+        "--volume", "-v", help="Filter verification to specific volume label or mount"
+    )
+    verify_parser.add_argument(
+        "--sample", "-s", type=float, help="Sample percentage of files to check (e.g. 5.0 for 5%%)"
+    )
+    verify_parser.add_argument(
+        "--json", action="store_true", help="Output verification report as JSON"
+    )
+
     # serve command
     serve_parser = subparsers.add_parser("serve", help="Launch the instant search Web UI")
     serve_parser.add_argument(
-        "--host", default="127.0.0.1", help="Host interface (default: 127.0.0.1)"
+        "--host",
+        default=SETTINGS.web_host,
+        help=f"Host interface (default: {SETTINGS.web_host})",
     )
     serve_parser.add_argument(
-        "--port", type=int, default=7890, help="Port to listen on (default: 7890)"
+        "--port",
+        type=int,
+        default=SETTINGS.web_port,
+        help=f"Port to listen on (default: {SETTINGS.web_port})",
     )
 
     # import-wired command
@@ -76,13 +97,21 @@ def build_parser() -> argparse.ArgumentParser:
     wired_parser.add_argument("--no-skip", action="store_true", help="Do not skip existing files")
 
     # offload command
+    default_vault = SETTINGS.default_vault_mount or "I:/"
+    default_label = SETTINGS.default_vault_label or "Main"
     offload_parser = subparsers.add_parser(
         "offload", help="Offload staged files to external cold vault"
     )
     offload_parser.add_argument(
-        "--vault", default="I:/", help="External vault mount point (default: I:/)"
+        "--vault",
+        default=default_vault,
+        help=f"External vault mount point (default: {default_vault})",
     )
-    offload_parser.add_argument("--label", default="Main", help="Vault label name (default: Main)")
+    offload_parser.add_argument(
+        "--label",
+        default=default_label,
+        help=f"Vault label name (default: {default_label})",
+    )
     offload_parser.add_argument(
         "--dry-run", action="store_true", help="Preview offload without modifying disk"
     )
@@ -202,6 +231,34 @@ def main():
         for c in stats["categories"]:
             print(f"  * {c['name']:<12}: {c['count']:>6} files ({c['size_formatted']})")
         print("==========================================================\n")
+
+    elif args.command == "verify-vault":
+        import json
+
+        from omnivault.verify import print_verify_report, verify_vault_integrity
+
+        def progress(curr, tot, name):
+            print(
+                f"\r[OmniVault Verify] Auditing {curr}/{tot} files ({name[:30]})...",
+                end="",
+                flush=True,
+            )
+
+        if not args.json:
+            print("[OmniVault] Initiating cryptographic vault verification...")
+
+        res = verify_vault_integrity(
+            volume_identifier=args.volume,
+            sample_pct=args.sample,
+            progress_callback=None if args.json else progress,
+        )
+        if not args.json:
+            print()  # Clear line after progress
+
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print_verify_report(res)
 
     elif args.command == "import-wired":
         from omnivault.staging import import_wired_folder

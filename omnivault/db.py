@@ -8,11 +8,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from omnivault.config import DATABASE_PATH
+from omnivault.config import DATABASE_PATH, ensure_dirs
 
 
 def get_connection(db_path: Path = DATABASE_PATH) -> sqlite3.Connection:
     """Returns a configured SQLite connection with WAL mode and row factory."""
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
@@ -23,6 +25,8 @@ def get_connection(db_path: Path = DATABASE_PATH) -> sqlite3.Connection:
 
 def init_db(db_path: Path = DATABASE_PATH) -> None:
     """Initializes the database schema and full-text search index."""
+    if db_path == DATABASE_PATH:
+        ensure_dirs()
     with get_connection(db_path) as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS volumes (

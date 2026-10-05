@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from omnivault.config import DATABASE_PATH, IGNORED_DIRS, get_category
+from omnivault.config import DATABASE_PATH, IGNORED_DIRS, SETTINGS, get_category
 from omnivault.db import format_bytes, get_connection, init_db
 
 # ── Bloat / cache directories that are safe to purge ────────────────────────
@@ -74,6 +74,19 @@ DEV_BLOAT_PATTERNS = [
     ".nuxt",
     "target",
 ]
+
+HEAVY_SYSTEM_DIRS = {
+    "appdata",
+    ".gradle",
+    ".claude-profiles",
+    ".gemini",
+    ".cache",
+    ".antigravity-ide",
+    ".vscode",
+    ".codex",
+    "$recycle.bin",
+    "system volume information",
+}
 
 
 def _expand(template: str) -> str:
@@ -267,14 +280,8 @@ def find_large_files(
         except Exception:
             pass
 
-    # Priority 2: Scan key user folders on laptop (Downloads, Videos, Models)
-    user_home = Path(os.path.expanduser("~"))
-    target_dirs = [
-        user_home / "Downloads",
-        user_home / "Videos",
-        user_home / ".lmstudio" / "models",
-        user_home / ".ollama" / "models",
-    ]
+    # Priority 2: Scan key user folders on laptop (from settings)
+    target_dirs = [Path(p) for p in SETTINGS.large_file_dirs]
 
     for target in target_dirs:
         if not target.is_dir():
@@ -373,20 +380,6 @@ class DevBloatEntry:
     parent_project: str
 
 
-HEAVY_SYSTEM_DIRS = {
-    "appdata",
-    ".gradle",
-    ".claude-profiles",
-    ".gemini",
-    ".cache",
-    ".antigravity-ide",
-    ".vscode",
-    ".codex",
-    "$recycle.bin",
-    "system volume information",
-}
-
-
 def scan_dev_bloat(
     roots: list[str] | None = None,
     min_size_mb: float = 30.0,
@@ -394,13 +387,7 @@ def scan_dev_bloat(
 ) -> list[DevBloatEntry]:
     """Finds node_modules, .venv, and other regenerable dependency directories."""
     if roots is None:
-        user_home = os.path.expanduser("~")
-        roots = [
-            os.path.join(user_home, "Downloads"),
-            os.path.join(user_home, "Documents"),
-            "F:\\Aaradhya-Dev-Tamrakar",
-            "D:\\",
-        ]
+        roots = [str(p) for p in SETTINGS.dev_scan_roots]
 
     min_bytes = int(min_size_mb * 1024 * 1024)
     found = []
