@@ -4,14 +4,17 @@ Extracts ultra-compact WebP thumbnails for offline visual previewing.
 """
 
 from pathlib import Path
-from typing import Optional
+
 from PIL import Image, ImageOps
+
 from omnivault.config import THUMBNAILS_DIR
 
 SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".gif"}
 
 
-def generate_thumbnail(filepath: Path | str, file_hash: str, max_size: tuple[int, int] = (160, 160)) -> Optional[Path]:
+def generate_thumbnail(
+    filepath: Path | str, file_hash: str, max_size: tuple[int, int] = (160, 160)
+) -> Path | None:
     """
     Generates a tiny WebP thumbnail and saves it to the local cache.
     Returns the path to the thumbnail if successful, or None.

@@ -4,27 +4,25 @@ Provides lightning-fast search-as-you-type, offline thumbnail previews,
 drive health monitoring, cache cleaning, and large file analysis.
 """
 
-import os
 import subprocess
 from pathlib import Path
-from typing import Optional
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.middleware.cors import CORSMiddleware
+
 import uvicorn
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
 
 from omnivault.config import THUMBNAILS_DIR
 from omnivault.db import (
+    check_all_volumes_online_status,
+    get_stats,
     init_db,
     search,
-    get_stats,
-    check_all_volumes_online_status,
 )
 from omnivault.storage import (
+    clean_cache_dir,
     generate_full_report,
     scan_cache_bloat,
-    clean_cache_dir,
-    get_drive_reports,
 )
 
 app = FastAPI(title="OmniVault Web Gateway", version="0.2.0")
@@ -52,9 +50,9 @@ def api_stats():
 @app.get("/api/search")
 def api_search(
     q: str = Query("", description="Search query"),
-    category: Optional[str] = Query(None, description="Category filter"),
-    volume: Optional[str] = Query(None, description="Volume label filter"),
-    ext: Optional[str] = Query(None, description="Extension filter"),
+    category: str | None = Query(None, description="Category filter"),
+    volume: str | None = Query(None, description="Volume label filter"),
+    ext: str | None = Query(None, description="Extension filter"),
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -83,7 +81,9 @@ def api_thumbnail(file_hash: str):
 def api_open_file(path: str = Query(..., description="Absolute path to open or reveal")):
     target = Path(path)
     if not target.exists():
-        raise HTTPException(status_code=404, detail="File is currently offline or volume is disconnected.")
+        raise HTTPException(
+            status_code=404, detail="File is currently offline or volume is disconnected."
+        )
 
     # Reveal in Windows Explorer
     subprocess.Popen(["explorer.exe", f"/select,{str(target)}"])
@@ -109,6 +109,7 @@ def api_clean_cache(execute: bool = Query(False, description="Whether to actuall
             total_freed += res["freed_bytes"]
             results.append(res)
     from omnivault.db import format_bytes
+
     return {
         "executed": execute,
         "total_freed_bytes": total_freed,
@@ -179,10 +180,10 @@ HTML_CONTENT = """<!DOCTYPE html>
     <div class="flex flex-col gap-3">
       <div class="relative">
         <i class="fa-solid fa-magnifying-glass absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-lg"></i>
-        <input 
-          id="search-input" 
-          type="text" 
-          placeholder="Search by filename, extension, tag, or topic across all drives..." 
+        <input
+          id="search-input"
+          type="text"
+          placeholder="Search by filename, extension, tag, or topic across all drives..."
           class="w-full pl-14 pr-12 py-4 rounded-2xl glass text-white placeholder-slate-500 text-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-all shadow-xl"
           autofocus
         />

@@ -5,10 +5,12 @@ Uses watchdog to detect new incoming files from LocalSend and automatically inge
 
 import time
 from pathlib import Path
-from watchdog.observers import Observer
+
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
 from omnivault.config import INCOMING_LOCALSEND
-from omnivault.staging import ingest_file_to_staging, ensure_staging_dirs
+from omnivault.staging import ensure_staging_dirs, ingest_file_to_staging
 
 
 class LocalSendHandler(FileSystemEventHandler):

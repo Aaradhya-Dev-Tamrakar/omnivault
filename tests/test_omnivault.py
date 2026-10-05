@@ -4,27 +4,24 @@ Tests hashing, indexing, FTS5 latency, storage profiling, and cache cleaner.
 """
 
 import gc
-import os
 import time
-from pathlib import Path
-from PIL import Image
+
 import pytest
+from PIL import Image
 
 from omnivault.db import (
-    init_db,
     get_or_create_volume,
-    upsert_files_batch,
+    init_db,
     search,
-    get_stats,
+    upsert_files_batch,
 )
 from omnivault.hasher import compute_blake3
-from omnivault.thumbnail import generate_thumbnail
 from omnivault.storage import (
-    get_drive_reports,
-    scan_cache_bloat,
     clean_cache_dir,
     find_duplicates,
+    get_drive_reports,
 )
+from omnivault.thumbnail import generate_thumbnail
 
 
 @pytest.fixture
@@ -61,18 +58,20 @@ def test_fts5_search_latency(temp_db):
     # Insert 1,000 synthetic records
     records = []
     for i in range(1000):
-        records.append({
-            "rel_path": f"documents/report_{i}.pdf",
-            "abs_path": f"C:/MockVolume/documents/report_{i}.pdf",
-            "filename": f"report_{i}.pdf",
-            "extension": ".pdf",
-            "category": "documents",
-            "size_bytes": 1024 * i,
-            "mtime": time.time(),
-            "blake3_hash": f"hash_{i}",
-            "has_thumbnail": 0,
-            "status": "COLD_ONLINE",
-        })
+        records.append(
+            {
+                "rel_path": f"documents/report_{i}.pdf",
+                "abs_path": f"C:/MockVolume/documents/report_{i}.pdf",
+                "filename": f"report_{i}.pdf",
+                "extension": ".pdf",
+                "category": "documents",
+                "size_bytes": 1024 * i,
+                "mtime": time.time(),
+                "blake3_hash": f"hash_{i}",
+                "has_thumbnail": 0,
+                "status": "COLD_ONLINE",
+            }
+        )
     upsert_files_batch(vol_id, records, db_path=temp_db)
 
     # Execute search

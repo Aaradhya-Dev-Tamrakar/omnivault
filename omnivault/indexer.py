@@ -5,12 +5,12 @@ Coordinates scanning, cryptographic verification, batch database commits, and ma
 
 import time
 from pathlib import Path
-from typing import Optional
+
 from omnivault.db import (
-    init_db,
-    get_or_create_volume,
-    upsert_files_batch,
     format_bytes,
+    get_or_create_volume,
+    init_db,
+    upsert_files_batch,
 )
 from omnivault.scanner import scan_directory
 
@@ -19,14 +19,14 @@ def index_volume(
     mount_point: str,
     label: str,
     role: str = "VAULT",
-    disk_name: Optional[str] = None,
+    disk_name: str | None = None,
     compute_hash: bool = True,
     make_thumbnails: bool = True,
     verbose: bool = True,
 ) -> dict:
     """
     Indexes a storage volume into the OmniVault SQLite database.
-    
+
     Args:
         mount_point: Drive letter or root directory (e.g. 'I:/' or 'H:/')
         label: Human-friendly volume label ('Main', 'Mini', 'Laptop_Staging')
@@ -57,7 +57,11 @@ def index_volume(
         if verbose:
             elapsed = time.perf_counter() - start_time
             rate = count / elapsed if elapsed > 0 else 0
-            print(f"\r[OmniVault] Indexing '{label}' -> {count} files ({format_bytes(bytes_so_far)}) @ {rate:.0f} files/s", end="", flush=True)
+            print(
+                f"\r[OmniVault] Indexing '{label}' -> {count} files ({format_bytes(bytes_so_far)}) @ {rate:.0f} files/s",
+                end="",
+                flush=True,
+            )
 
     for batch in scan_directory(
         root_path=root_path,
@@ -72,7 +76,9 @@ def index_volume(
 
     duration = time.perf_counter() - start_time
     if verbose:
-        print(f"\n[OmniVault] Finished indexing '{label}': {total_files} files ({format_bytes(total_bytes)}) in {duration:.2f}s.")
+        print(
+            f"\n[OmniVault] Finished indexing '{label}': {total_files} files ({format_bytes(total_bytes)}) in {duration:.2f}s."
+        )
 
     return {
         "volume_id": volume_id,

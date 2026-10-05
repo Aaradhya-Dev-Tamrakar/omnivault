@@ -4,13 +4,14 @@ Uses BLAKE3 (SIMD accelerated) with streaming chunk reads.
 """
 
 from pathlib import Path
-from typing import Optional
 
 try:
     import blake3
+
     HAS_BLAKE3 = True
 except ImportError:
     import hashlib
+
     HAS_BLAKE3 = False
 
 

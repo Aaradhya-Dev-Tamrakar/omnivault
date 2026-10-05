@@ -7,21 +7,21 @@ and automated offload to the External Cold Vault.
 import shutil
 import time
 from pathlib import Path
-from typing import Optional
+
 from omnivault.config import (
-    STAGING_DIR,
     INCOMING_LOCALSEND,
     INCOMING_WIRED,
+    STAGING_DIR,
     get_category,
+)
+from omnivault.db import (
+    format_bytes,
+    get_connection,
+    get_or_create_volume,
+    upsert_files_batch,
 )
 from omnivault.hasher import compute_blake3
 from omnivault.thumbnail import generate_thumbnail
-from omnivault.db import (
-    get_or_create_volume,
-    upsert_files_batch,
-    get_connection,
-    format_bytes,
-)
 
 
 def ensure_staging_dirs():
@@ -35,7 +35,7 @@ def ingest_file_to_staging(
     src_path: Path | str,
     stream: str = "localsend",
     delete_source: bool = False,
-) -> Optional[dict]:
+) -> dict | None:
     """
     Ingests a single file into the staging pipeline.
     Calculates BLAKE3 hash, checks for duplicates, and records in catalog.
@@ -126,7 +126,9 @@ def import_wired_folder(
     with get_connection() as conn:
         known_hashes = {
             row["blake3_hash"]
-            for row in conn.execute("SELECT blake3_hash FROM files WHERE blake3_hash IS NOT NULL").fetchall()
+            for row in conn.execute(
+                "SELECT blake3_hash FROM files WHERE blake3_hash IS NOT NULL"
+            ).fetchall()
         }
 
     for f in files_to_process:
@@ -214,7 +216,7 @@ def offload_staging_to_vault(
             # Integrity check
             new_hash = compute_blake3(dest_file)
             if new_hash != f["blake3_hash"]:
-                raise IOError(f"Integrity check failed for {src.name}! Hash mismatch.")
+                raise OSError(f"Integrity check failed for {src.name}! Hash mismatch.")
 
             # Record in vault volume
             rel_path = dest_file.relative_to(vault_root).as_posix()

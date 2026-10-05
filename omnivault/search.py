@@ -3,19 +3,17 @@ Search and Query Engine for OmniVault
 Provides instant lookups, location-aware status resolution, and result formatting.
 """
 
-from typing import Optional
 from omnivault.db import (
-    search,
     check_all_volumes_online_status,
-    get_stats,
+    search,
 )
 
 
 def find_files(
     query: str,
-    category: Optional[str] = None,
-    volume_label: Optional[str] = None,
-    extension: Optional[str] = None,
+    category: str | None = None,
+    volume_label: str | None = None,
+    extension: str | None = None,
     limit: int = 50,
 ) -> dict:
     """
@@ -58,8 +56,12 @@ def print_search_results(results: dict) -> None:
             status_tag = "\033[96m[WARM-LAPTOP]\033[0m"
 
         has_thumb = " [img]" if item["has_thumbnail"] else ""
-        print(f" {idx:2d}. {status_tag}{has_thumb} \033[1m{item['filename']}\033[0m ({item['size_formatted']})")
-        print(f"     Volume: {item['volume_label']} | Category: {item['category']} | Path: {item['rel_path']}")
+        print(
+            f" {idx:2d}. {status_tag}{has_thumb} \033[1m{item['filename']}\033[0m ({item['size_formatted']})"
+        )
+        print(
+            f"     Volume: {item['volume_label']} | Category: {item['category']} | Path: {item['rel_path']}"
+        )
         print(f"     Exact: {item['abs_path']}")
         if item["blake3_hash"]:
             print(f"     BLAKE3: {item['blake3_hash'][:16]}...")

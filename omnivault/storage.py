@@ -12,30 +12,47 @@ Provides:
 """
 
 import os
-import time
 import shutil
-import sqlite3
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-from dataclasses import dataclass, field
 
-from omnivault.config import DATABASE_PATH, get_category, IGNORED_DIRS
-from omnivault.db import get_connection, format_bytes, init_db
-
+from omnivault.config import DATABASE_PATH, IGNORED_DIRS, get_category
+from omnivault.db import format_bytes, get_connection, init_db
 
 # ── Bloat / cache directories that are safe to purge ────────────────────────
 KNOWN_CACHE_DIRS: list[dict] = [
     {"path": "{LOCALAPPDATA}\\Temp", "label": "Windows User Temp", "safe": True},
     {"path": "C:\\Windows\\Temp", "label": "Windows System Temp", "safe": True},
-    {"path": "{LOCALAPPDATA}\\Microsoft\\Windows\\Explorer", "label": "Explorer Thumbnail Cache", "safe": True},
-    {"path": "{LOCALAPPDATA}\\Google\\Chrome\\User Data\\Default\\Cache", "label": "Chrome Browser Cache", "safe": True},
-    {"path": "{LOCALAPPDATA}\\Google\\Chrome\\User Data\\Default\\Code Cache", "label": "Chrome Code Cache", "safe": True},
-    {"path": "{LOCALAPPDATA}\\Microsoft\\Edge\\User Data\\Default\\Cache", "label": "Edge Browser Cache", "safe": True},
+    {
+        "path": "{LOCALAPPDATA}\\Microsoft\\Windows\\Explorer",
+        "label": "Explorer Thumbnail Cache",
+        "safe": True,
+    },
+    {
+        "path": "{LOCALAPPDATA}\\Google\\Chrome\\User Data\\Default\\Cache",
+        "label": "Chrome Browser Cache",
+        "safe": True,
+    },
+    {
+        "path": "{LOCALAPPDATA}\\Google\\Chrome\\User Data\\Default\\Code Cache",
+        "label": "Chrome Code Cache",
+        "safe": True,
+    },
+    {
+        "path": "{LOCALAPPDATA}\\Microsoft\\Edge\\User Data\\Default\\Cache",
+        "label": "Edge Browser Cache",
+        "safe": True,
+    },
     {"path": "{LOCALAPPDATA}\\pip\\cache", "label": "Python pip Cache", "safe": True},
     {"path": "{LOCALAPPDATA}\\npm-cache", "label": "npm Cache", "safe": True},
     {"path": "{APPDATA}\\Code\\Cache", "label": "VS Code Cache", "safe": True},
     {"path": "{APPDATA}\\Code\\CachedData", "label": "VS Code Cached Data", "safe": True},
-    {"path": "{APPDATA}\\Code\\CachedExtensionVSIXs", "label": "VS Code Cached Extensions", "safe": True},
+    {
+        "path": "{APPDATA}\\Code\\CachedExtensionVSIXs",
+        "label": "VS Code Cached Extensions",
+        "safe": True,
+    },
     {"path": "{APPDATA}\\Code\\logs", "label": "VS Code Logs", "safe": True},
     {"path": "{LOCALAPPDATA}\\Yarn\\Cache", "label": "Yarn Cache", "safe": True},
     {"path": "{LOCALAPPDATA}\\pnpm-cache", "label": "pnpm Cache", "safe": True},
@@ -45,7 +62,18 @@ KNOWN_CACHE_DIRS: list[dict] = [
 ]
 
 # Directories that bloat over time in dev projects
-DEV_BLOAT_PATTERNS = ["node_modules", ".venv", "venv", "__pycache__", ".tox", "dist", "build", ".next", ".nuxt", "target"]
+DEV_BLOAT_PATTERNS = [
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".tox",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    "target",
+]
 
 
 def _expand(template: str) -> str:
@@ -60,6 +88,7 @@ def _expand(template: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Drive Usage Profiler
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 @dataclass
 class DriveReport:
@@ -82,6 +111,7 @@ def get_drive_reports() -> list[DriveReport]:
                 total, used, free = shutil.disk_usage(root)
                 # Get volume label via ctypes on Windows
                 import ctypes
+
                 buf = ctypes.create_unicode_buffer(1024)
                 ctypes.windll.kernel32.GetVolumeInformationW(
                     root, buf, 1024, None, None, None, None, 0
@@ -93,10 +123,17 @@ def get_drive_reports() -> list[DriveReport]:
                 )
                 fs_type = fs_buf.value or "Unknown"
                 pct = round((used / total) * 100, 1) if total > 0 else 0.0
-                reports.append(DriveReport(
-                    letter=letter, label=label, fs_type=fs_type,
-                    total_bytes=total, free_bytes=free, used_bytes=used, used_pct=pct,
-                ))
+                reports.append(
+                    DriveReport(
+                        letter=letter,
+                        label=label,
+                        fs_type=fs_type,
+                        total_bytes=total,
+                        free_bytes=free,
+                        used_bytes=used,
+                        used_pct=pct,
+                    )
+                )
             except Exception:
                 pass
     return reports
@@ -128,13 +165,15 @@ def profile_directory(root: str | Path, depth: int = 1) -> list[dict]:
                             pass
             except (PermissionError, OSError):
                 pass
-            results.append({
-                "name": entry.name,
-                "path": entry.path,
-                "size_bytes": total_size,
-                "size_formatted": format_bytes(total_size),
-                "file_count": file_count,
-            })
+            results.append(
+                {
+                    "name": entry.name,
+                    "path": entry.path,
+                    "size_bytes": total_size,
+                    "size_formatted": format_bytes(total_size),
+                    "file_count": file_count,
+                }
+            )
     except (PermissionError, OSError):
         pass
     results.sort(key=lambda x: x["size_bytes"], reverse=True)
@@ -145,6 +184,7 @@ def profile_directory(root: str | Path, depth: int = 1) -> list[dict]:
 # 2. Duplicate File Detector
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def find_duplicates(min_size: int = 1024, db_path: Path = DATABASE_PATH) -> list[dict]:
     """
     Identifies duplicate files across all indexed volumes using BLAKE3 hashes.
@@ -152,14 +192,17 @@ def find_duplicates(min_size: int = 1024, db_path: Path = DATABASE_PATH) -> list
     """
     init_db(db_path)
     with get_connection(db_path) as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT blake3_hash, COUNT(*) as cnt, SUM(size_bytes) as total_size
             FROM files
             WHERE blake3_hash IS NOT NULL AND size_bytes >= ?
             GROUP BY blake3_hash
             HAVING cnt > 1
             ORDER BY total_size DESC
-        """, (min_size,)).fetchall()
+        """,
+            (min_size,),
+        ).fetchall()
 
         groups = []
         for row in rows:
@@ -170,21 +213,24 @@ def find_duplicates(min_size: int = 1024, db_path: Path = DATABASE_PATH) -> list
                 (row["blake3_hash"],),
             ).fetchall()
             wasted = row["total_size"] - (files[0]["size_bytes"] if files else 0)
-            groups.append({
-                "blake3_hash": row["blake3_hash"],
-                "count": row["cnt"],
-                "each_size": files[0]["size_bytes"] if files else 0,
-                "each_size_formatted": format_bytes(files[0]["size_bytes"]) if files else "0 B",
-                "wasted_bytes": wasted,
-                "wasted_formatted": format_bytes(wasted),
-                "files": [dict(f) for f in files],
-            })
+            groups.append(
+                {
+                    "blake3_hash": row["blake3_hash"],
+                    "count": row["cnt"],
+                    "each_size": files[0]["size_bytes"] if files else 0,
+                    "each_size_formatted": format_bytes(files[0]["size_bytes"]) if files else "0 B",
+                    "wasted_bytes": wasted,
+                    "wasted_formatted": format_bytes(wasted),
+                    "files": [dict(f) for f in files],
+                }
+            )
     return groups
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Large File Finder
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def find_large_files(
     root: str | Path = "C:\\Users",
@@ -208,14 +254,16 @@ def find_large_files(
                 for r in rows:
                     p = r["abs_path"]
                     seen_paths.add(p.lower())
-                    results.append({
-                        "filename": r["filename"],
-                        "path": p,
-                        "size_bytes": r["size_bytes"],
-                        "size_formatted": format_bytes(r["size_bytes"]),
-                        "category": r["category"],
-                        "extension": r["extension"],
-                    })
+                    results.append(
+                        {
+                            "filename": r["filename"],
+                            "path": p,
+                            "size_bytes": r["size_bytes"],
+                            "size_formatted": format_bytes(r["size_bytes"]),
+                            "category": r["category"],
+                            "extension": r["extension"],
+                        }
+                    )
         except Exception:
             pass
 
@@ -232,7 +280,11 @@ def find_large_files(
         if not target.is_dir():
             continue
         for dirpath, dirnames, filenames in os.walk(target, followlinks=False):
-            dirnames[:] = [d for d in dirnames if d.lower() not in HEAVY_SYSTEM_DIRS and d.lower() not in IGNORED_DIRS]
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d.lower() not in HEAVY_SYSTEM_DIRS and d.lower() not in IGNORED_DIRS
+            ]
             for fn in filenames:
                 fp = os.path.join(dirpath, fn)
                 if fp.lower() in seen_paths:
@@ -242,14 +294,16 @@ def find_large_files(
                     if sz >= min_bytes:
                         ext = Path(fn).suffix.lower()
                         seen_paths.add(fp.lower())
-                        results.append({
-                            "filename": fn,
-                            "path": fp,
-                            "size_bytes": sz,
-                            "size_formatted": format_bytes(sz),
-                            "category": get_category(ext),
-                            "extension": ext,
-                        })
+                        results.append(
+                            {
+                                "filename": fn,
+                                "path": fp,
+                                "size_bytes": sz,
+                                "size_formatted": format_bytes(sz),
+                                "category": get_category(ext),
+                                "extension": ext,
+                            }
+                        )
                 except OSError:
                     pass
 
@@ -260,6 +314,7 @@ def find_large_files(
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. Cache & Temp Bloat Scanner
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 @dataclass
 class BloatEntry:
@@ -290,14 +345,16 @@ def scan_cache_bloat() -> list[BloatEntry]:
             except (PermissionError, OSError):
                 pass
             if total > 0:
-                results.append(BloatEntry(
-                    label=entry["label"],
-                    path=expanded,
-                    file_count=count,
-                    size_bytes=total,
-                    size_formatted=format_bytes(total),
-                    safe_to_delete=entry.get("safe", False),
-                ))
+                results.append(
+                    BloatEntry(
+                        label=entry["label"],
+                        path=expanded,
+                        file_count=count,
+                        size_bytes=total,
+                        size_formatted=format_bytes(total),
+                        safe_to_delete=entry.get("safe", False),
+                    )
+                )
     results.sort(key=lambda x: x.size_bytes, reverse=True)
     return results
 
@@ -305,6 +362,7 @@ def scan_cache_bloat() -> list[BloatEntry]:
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. Dev Dependency Bloat Scanner (node_modules, .venv, etc.)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 @dataclass
 class DevBloatEntry:
@@ -316,9 +374,18 @@ class DevBloatEntry:
 
 
 HEAVY_SYSTEM_DIRS = {
-    "appdata", ".gradle", ".claude-profiles", ".gemini", ".cache",
-    ".antigravity-ide", ".vscode", ".codex", "$recycle.bin", "system volume information"
+    "appdata",
+    ".gradle",
+    ".claude-profiles",
+    ".gemini",
+    ".cache",
+    ".antigravity-ide",
+    ".vscode",
+    ".codex",
+    "$recycle.bin",
+    "system volume information",
 }
+
 
 def scan_dev_bloat(
     roots: list[str] | None = None,
@@ -343,7 +410,11 @@ def scan_dev_bloat(
             continue
         for dirpath, dirnames, _ in os.walk(root, followlinks=False):
             # Prune known heavy system directories immediately
-            dirnames[:] = [d for d in dirnames if d.lower() not in HEAVY_SYSTEM_DIRS and d.lower() not in IGNORED_DIRS]
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d.lower() not in HEAVY_SYSTEM_DIRS and d.lower() not in IGNORED_DIRS
+            ]
 
             # Depth limiter
             rel_depth = dirpath.replace(root, "").count(os.sep)
@@ -366,13 +437,15 @@ def scan_dev_bloat(
                         pass
 
                     if total >= min_bytes:
-                        found.append(DevBloatEntry(
-                            name=pattern,
-                            path=full,
-                            size_bytes=total,
-                            size_formatted=format_bytes(total),
-                            parent_project=dirpath,
-                        ))
+                        found.append(
+                            DevBloatEntry(
+                                name=pattern,
+                                path=full,
+                                size_bytes=total,
+                                size_formatted=format_bytes(total),
+                                parent_project=dirpath,
+                            )
+                        )
                     # Don't recurse into the bloat dir itself
                     dirnames.remove(pattern)
 
@@ -383,6 +456,7 @@ def scan_dev_bloat(
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. Full Storage Report Generator
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def generate_full_report(
     scan_caches: bool = True,
@@ -423,8 +497,14 @@ def generate_full_report(
         total_reclaimable += cache_total
         report["cache_bloat"] = {
             "entries": [
-                {"label": c.label, "path": c.path, "files": c.file_count,
-                 "size_formatted": c.size_formatted, "size_bytes": c.size_bytes, "safe": c.safe_to_delete}
+                {
+                    "label": c.label,
+                    "path": c.path,
+                    "files": c.file_count,
+                    "size_formatted": c.size_formatted,
+                    "size_bytes": c.size_bytes,
+                    "safe": c.safe_to_delete,
+                }
                 for c in caches
             ],
             "total_bytes": cache_total,
@@ -438,8 +518,13 @@ def generate_full_report(
         total_reclaimable += dev_total
         report["dev_bloat"] = {
             "entries": [
-                {"name": d.name, "path": d.path, "project": d.parent_project,
-                 "size_formatted": d.size_formatted, "size_bytes": d.size_bytes}
+                {
+                    "name": d.name,
+                    "path": d.path,
+                    "project": d.parent_project,
+                    "size_formatted": d.size_formatted,
+                    "size_bytes": d.size_bytes,
+                }
                 for d in dev_items
             ],
             "total_bytes": dev_total,
@@ -478,6 +563,7 @@ def generate_full_report(
 # ═══════════════════════════════════════════════════════════════════════════
 # 7. Safe Cleanup Actions
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def clean_cache_dir(path: str, dry_run: bool = True) -> dict:
     """Safely removes contents of a cache directory."""
