@@ -177,6 +177,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum directory size in MB to show (default: 30)",
     )
 
+    # ── Cloud Archival & Packaging Command ──────────────────────────────
+    pack_parser = subparsers.add_parser(
+        "pack",
+        help="Package large directories/repacks for cloud cold storage (split volumes, parity, store mode)",
+    )
+    pack_parser.add_argument("source", help="Source directory or file to package")
+    pack_parser.add_argument("--staging", help="Staging output directory (default: auto-picked drive)")
+    pack_parser.add_argument("--name", help="Archive name")
+    pack_parser.add_argument(
+        "--split", default="10g", help="Volume split size (e.g. '10g', '5g', default: 10g)"
+    )
+    pack_parser.add_argument(
+        "--parity", type=int, default=3, help="Recovery record percentage (default: 3%%)"
+    )
+    pack_parser.add_argument("--password", "-p", help="Optional encryption password")
+    pack_parser.add_argument(
+        "--cloud", default="Google Drive (5TB)", help="Cloud provider name for catalog descriptor"
+    )
+    pack_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Execute the packaging command immediately (default: preview analysis and command)",
+    )
+
     return parser
 
 
@@ -438,6 +462,48 @@ def main():
             )
         else:
             print("\n[OmniVault] Ready for targeted removal.")
+
+    elif args.command == "pack":
+        from omnivault.cloud_pack import run_cloud_pack
+
+        print(f"\n[OmniVault Pack] Inspecting payload: {args.source}...")
+        try:
+            res = run_cloud_pack(
+                source_dir=args.source,
+                staging_dir=args.staging,
+                archive_name=args.name,
+                split_size=args.split,
+                parity_pct=args.parity,
+                password=args.password,
+                cloud_provider=args.cloud,
+                execute=args.execute,
+            )
+        except Exception as e:
+            print(f"\033[91m[OmniVault Error]\033[0m {e}")
+            sys.exit(1)
+
+        print("\n==================== OMNIVAULT CLOUD PACK ====================")
+        print(f" Source Payload      : {res['source']}")
+        print(f" Total Payload Size  : {res['total_formatted']} ({res['total_files']} files)")
+        pre_str = f"YES ({res['precompressed_pct']}% pre-compressed)" if res['is_precompressed'] else "NO"
+        print(f" Pre-Compressed      : {pre_str}")
+        print(f" Compression Mode    : {res['recommended_mode'].upper()} (Store Mode - zero CPU bottleneck)")
+        print(f" Staging Target      : {res['staging_dir']}")
+        print(f" Staging Free Headroom: Drive {res['staging_drive']}: with {res['staging_free']} free")
+        print(f" Archiver Engine     : {res['tool_type'].upper()}")
+        print(f" Generated Command   : {res['command_str']}")
+        print("==============================================================")
+
+        if not args.execute:
+            print("\n\033[93m[PREVIEW MODE]\033[0m No files were packaged yet.")
+            print("To execute this stream at hardware drive speed and register in catalog, run:")
+            print(f"  omnivault pack \"{args.source}\" --execute" + (f" --split {args.split}" if args.split != "10g" else ""))
+        else:
+            print("\n\033[92m[SUCCESS]\033[0m Packaging complete!")
+            print(f" Elapsed Time        : {res.get('elapsed_seconds', 0)} seconds")
+            print(f" Volumes Generated   : {len(res['volume_parts'])} parts")
+            print(f" Catalog Registered  : Volume #{res['catalog_volume_id']} in ~/.omnivault/catalog.db")
+            print("\nYou can now safely upload these volumes to Google Drive.")
 
     else:
         parser.print_help()
